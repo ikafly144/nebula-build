@@ -84,6 +84,7 @@ jobs:
 
           # Extract the archive
           unzip -q bepinex.zip -d bepinex-extract
+          chmod -R a+rX bepinex-extract
 
           # Set up the directory structure expected by the csproj: $(AmongUs)/BepInEx/core/
           mkdir -p "${{ github.workspace }}/among-us/BepInEx/interop"
