@@ -124,26 +124,66 @@ jobs:
           echo "BepInEx core DLLs available:"
           ls "${{ github.workspace }}/among-us/BepInEx/core/"
 
-      - name: Create CI project file
+      - name: Download Unity libraries from unity.bepinex.dev
         if: steps.check.outputs.needs_build == 'true'
         run: |
-          # UnityEngine references are only used by commented sample code in NebulaLoader.cs.
-          # They fail to resolve in this CI environment, so remove those using lines for build.
-          sed -i -E \
-            -e '/^[[:space:]]*(global[[:space:]]+)?using[[:space:]]+UnityEngine\.Events/ d' \
-            -e '/^[[:space:]]*(global[[:space:]]+)?using[[:space:]]+UnityEngine\.SceneManagement/ d' \
-            nebula-source/NebulaLoader/NebulaLoader.cs
+          INTEROP_DIR="${{ github.workspace }}/among-us/BepInEx/interop"
+          mkdir -p "$INTEROP_DIR"
 
-          # Verify that the target file exists and that the UnityEngine using lines were removed.
-          if [ ! -f nebula-source/NebulaLoader/NebulaLoader.cs ]; then
-            echo "CI preparation failed: nebula-source/NebulaLoader/NebulaLoader.cs is missing." >&2
+          # Try common archive paths first, then fall back to latest version from index.
+          CANDIDATE_URLS=(
+            "https://unity.bepinex.dev/libraries/latest.zip"
+            "https://unity.bepinex.dev/libraries/2021.3.45f1.zip"
+            "https://unity.bepinex.dev/libraries/2021.3.31f1.zip"
+            "https://unity.bepinex.dev/libraries/2021.3.23f1.zip"
+          )
+
+          UNITY_LIB_URL=""
+          for url in "${CANDIDATE_URLS[@]}"; do
+            if curl -fsI "$url" >/dev/null; then
+              UNITY_LIB_URL="$url"
+              break
+            fi
+          done
+
+          if [ -z "$UNITY_LIB_URL" ]; then
+            INDEX_HTML=$(curl -fsSL "https://unity.bepinex.dev/libraries/")
+            LATEST_VERSION=$(echo "$INDEX_HTML" | grep -oE '>[0-9]+\.[0-9]+\.[0-9]+[a-z][0-9]+/<'
+              | sed -E 's/[><\/]//g'
+              | sort -V
+              | tail -n 1)
+            if [ -n "$LATEST_VERSION" ]; then
+              UNITY_LIB_URL="https://unity.bepinex.dev/libraries/${LATEST_VERSION}.zip"
+            fi
+          fi
+
+          if [ -z "$UNITY_LIB_URL" ]; then
+            echo "Failed to determine Unity libraries URL from unity.bepinex.dev" >&2
             exit 1
           fi
 
-          if grep -E '^[[:space:]]*(global[[:space:]]+)?using[[:space:]]+UnityEngine\.(Events|SceneManagement)\b' \
-            nebula-source/NebulaLoader/NebulaLoader.cs >/dev/null; then
-            echo "CI preparation failed: UnityEngine.* using directives remain in NebulaLoader.cs." >&2
-            echo "Please update the sed patterns in .github/workflows/build-nebula-loader.yml." >&2
+          echo "Downloading Unity libraries from: $UNITY_LIB_URL"
+          curl -fsSL -o unity-libraries.zip "$UNITY_LIB_URL"
+          unzip -q unity-libraries.zip -d unity-libraries
+          chmod -R a+rX unity-libraries
+
+          # Copy all managed Unity DLLs to interop so csproj wildcard reference can resolve them.
+          find unity-libraries -type f -name '*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
+
+          if [ -z "$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' -print -quit)" ]; then
+            echo "No UnityEngine*.dll found after extraction from unity.bepinex.dev archive." >&2
+            exit 1
+          fi
+
+          echo "Unity interop DLLs available:"
+          ls "$INTEROP_DIR" | head -n 50
+
+      - name: Create CI project file
+        if: steps.check.outputs.needs_build == 'true'
+        run: |
+          # Verify that the target file exists.
+          if [ ! -f nebula-source/NebulaLoader/NebulaLoader.cs ]; then
+            echo "CI preparation failed: nebula-source/NebulaLoader/NebulaLoader.cs is missing." >&2
             exit 1
           fi
           # Replace the csproj with a CI-appropriate version.
