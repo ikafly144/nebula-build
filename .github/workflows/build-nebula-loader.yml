@@ -124,41 +124,41 @@ jobs:
           echo "BepInEx core DLLs available:"
           ls "${{ github.workspace }}/among-us/BepInEx/core/"
 
-      - name: Download Unity libraries from unity.bepinex.dev
+      - name: Download Unity libraries from nuget.bepinex.dev
         if: steps.check.outputs.needs_build == 'true'
         run: |
           INTEROP_DIR="${{ github.workspace }}/among-us/BepInEx/interop"
           mkdir -p "$INTEROP_DIR"
 
-          # Try known-stable archive paths from unity.bepinex.dev.
-          CANDIDATE_URLS=(
-            "https://unity.bepinex.dev/libraries/latest.zip"
-            "https://unity.bepinex.dev/libraries/2021.3.45f1.zip"
-            "https://unity.bepinex.dev/libraries/2021.3.31f1.zip"
-            "https://unity.bepinex.dev/libraries/2021.3.23f1.zip"
-          )
+          PACKAGE_ID="UnityEngine.Modules"
+          PACKAGE_ID_LOWER=$(echo "$PACKAGE_ID" | tr '[:upper:]' '[:lower:]')
+          INDEX_URL="https://nuget.bepinex.dev/packages/${PACKAGE_ID}/index.json"
+          INDEX_URL_LOWER="https://nuget.bepinex.dev/packages/${PACKAGE_ID_LOWER}/index.json"
 
-          UNITY_LIB_URL=""
-          for url in "${CANDIDATE_URLS[@]}"; do
-            if curl -fI "$url" >/dev/null; then
-              UNITY_LIB_URL="$url"
-              break
-            fi
-          done
-
-          if [ -z "$UNITY_LIB_URL" ]; then
-            echo "Failed to locate Unity libraries archive from unity.bepinex.dev candidate URLs" >&2
+          if curl -fsSL "$INDEX_URL" -o unityengine-modules-index.json; then
+            :
+          elif curl -fsSL "$INDEX_URL_LOWER" -o unityengine-modules-index.json; then
+            :
+          else
+            echo "Failed to download package index for ${PACKAGE_ID} from nuget.bepinex.dev" >&2
             exit 1
           fi
 
-          echo "Downloading Unity libraries from: $UNITY_LIB_URL"
-          curl -fSL -o unity-libraries.zip "$UNITY_LIB_URL"
-          unzip unity-libraries.zip -d unity-libraries
-          rm -f unity-libraries.zip
-          chmod -R a+rX unity-libraries
+          VERSION=$(jq -r '.versions | map(select(type=="string")) | sort_by(split(".") | map(tonumber? // 0)) | last // empty' unityengine-modules-index.json)
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "Failed to resolve package version for ${PACKAGE_ID}" >&2
+            exit 1
+          fi
+
+          NUPKG_URL="https://nuget.bepinex.dev/packages/${PACKAGE_ID_LOWER}/${VERSION}"
+          echo "Downloading ${PACKAGE_ID} ${VERSION} from: $NUPKG_URL"
+          curl -fsSL -o unityengine-modules.nupkg "$NUPKG_URL"
+          unzip -q unityengine-modules.nupkg -d unityengine-modules
+          rm -f unityengine-modules.nupkg unityengine-modules-index.json
+          chmod -R a+rX unityengine-modules
 
           # Copy UnityEngine DLLs required by compile-time references.
-          find unity-libraries -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
+          find unityengine-modules -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
           COPIED_UNITY_DLL_COUNT=$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' | wc -l)
           if [ "$COPIED_UNITY_DLL_COUNT" -eq 0 ]; then
             echo "No UnityEngine*.dll files were copied into interop directory." >&2
@@ -166,7 +166,7 @@ jobs:
           fi
 
           if [ -z "$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' -print -quit)" ]; then
-            echo "No UnityEngine*.dll found after extraction from unity.bepinex.dev archive." >&2
+            echo "No UnityEngine*.dll found after extraction from ${PACKAGE_ID} package." >&2
             exit 1
           fi
 
