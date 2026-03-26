@@ -124,26 +124,118 @@ jobs:
           echo "BepInEx core DLLs available:"
           ls "${{ github.workspace }}/among-us/BepInEx/core/"
 
-      - name: Create CI project file
+      - name: Download Unity libraries from nuget.bepinex.dev
         if: steps.check.outputs.needs_build == 'true'
         run: |
-          # UnityEngine references are only used by commented sample code in NebulaLoader.cs.
-          # They fail to resolve in this CI environment, so remove those using lines for build.
-          sed -i -E \
-            -e '/^[[:space:]]*(global[[:space:]]+)?using[[:space:]]+UnityEngine\.Events/ d' \
-            -e '/^[[:space:]]*(global[[:space:]]+)?using[[:space:]]+UnityEngine\.SceneManagement/ d' \
-            nebula-source/NebulaLoader/NebulaLoader.cs
+          INTEROP_DIR="${{ github.workspace }}/among-us/BepInEx/interop"
+          mkdir -p "$INTEROP_DIR"
 
-          # Verify that the target file exists and that the UnityEngine using lines were removed.
-          if [ ! -f nebula-source/NebulaLoader/NebulaLoader.cs ]; then
-            echo "CI preparation failed: nebula-source/NebulaLoader/NebulaLoader.cs is missing." >&2
+          PACKAGE_ID="UnityEngine.Modules"
+          PACKAGE_ID_LOWER=$(echo "$PACKAGE_ID" | tr '[:upper:]' '[:lower:]')
+          REGISTRATION_INDEX_URL="https://nuget.bepinex.dev/v3/registration/${PACKAGE_ID_LOWER}/index.json"
+
+          if ! curl -fsSL -o unityengine-modules-registration-index.json "$REGISTRATION_INDEX_URL"; then
+            echo "Failed to download registration index: $REGISTRATION_INDEX_URL" >&2
             exit 1
           fi
 
-          if grep -E '^[[:space:]]*(global[[:space:]]+)?using[[:space:]]+UnityEngine\.(Events|SceneManagement)\b' \
-            nebula-source/NebulaLoader/NebulaLoader.cs >/dev/null; then
-            echo "CI preparation failed: UnityEngine.* using directives remain in NebulaLoader.cs." >&2
-            echo "Please update the sed patterns in .github/workflows/build-nebula-loader.yml." >&2
+          if ! jq -e '.items | type == "array"' unityengine-modules-registration-index.json >/dev/null 2>&1; then
+            echo "Invalid registration index structure for ${PACKAGE_ID}: missing .items array" >&2
+            exit 1
+          fi
+
+          PACKAGE_CONTENT_URL=$(jq -r '
+            [ .items[]? | .items[]?
+              | select((.catalogEntry.version // "") != "" and (.packageContent // "") != "") ]
+            | last
+            | .packageContent // empty
+          ' unityengine-modules-registration-index.json)
+
+          if [ -z "$PACKAGE_CONTENT_URL" ] || [ "$PACKAGE_CONTENT_URL" = "null" ]; then
+            REGISTRATION_PAGE_URL=$(jq -r '
+              [ .items[]? | .["@id"] // empty ]
+              | map(select(. != ""))
+              | last
+              // empty
+            ' unityengine-modules-registration-index.json)
+
+            if [ -z "$REGISTRATION_PAGE_URL" ] || [ "$REGISTRATION_PAGE_URL" = "null" ]; then
+              echo "Failed to resolve registration page URL for ${PACKAGE_ID}" >&2
+              exit 1
+            fi
+
+            if ! curl -fsSL -o unityengine-modules-registration-page.json "$REGISTRATION_PAGE_URL"; then
+              echo "Failed to download registration page: $REGISTRATION_PAGE_URL" >&2
+              exit 1
+            fi
+
+            if ! jq -e '.items | type == "array"' unityengine-modules-registration-page.json >/dev/null 2>&1; then
+              echo "Invalid registration page structure for ${PACKAGE_ID}: missing .items array" >&2
+              exit 1
+            fi
+
+            PACKAGE_CONTENT_URL=$(jq -r '
+              [ .items[]?
+                | select((.catalogEntry.version // "") != "" and (.packageContent // "") != "") ]
+              | last
+              | .packageContent // empty
+            ' unityengine-modules-registration-page.json)
+          fi
+
+          if [ -z "$PACKAGE_CONTENT_URL" ] || [ "$PACKAGE_CONTENT_URL" = "null" ]; then
+            echo "Failed to resolve packageContent URL for ${PACKAGE_ID}" >&2
+            exit 1
+          fi
+
+          rm -rf unityengine-modules unityengine-modules.nupkg
+          if ! curl -fsSL -o unityengine-modules.nupkg "$PACKAGE_CONTENT_URL"; then
+            echo "Failed to download packageContent URL: $PACKAGE_CONTENT_URL" >&2
+            exit 1
+          fi
+          if ! unzip -tq unityengine-modules.nupkg >/dev/null 2>&1; then
+            echo "nupkg integrity check failed (invalid/corrupt archive): $PACKAGE_CONTENT_URL" >&2
+            exit 1
+          fi
+
+          unzip -q unityengine-modules.nupkg -d unityengine-modules
+          echo "Downloaded ${PACKAGE_ID} package from packageContent: $PACKAGE_CONTENT_URL"
+          rm -f unityengine-modules.nupkg unityengine-modules-registration-index.json unityengine-modules-registration-page.json
+          chmod -R a+rX unityengine-modules
+
+          # Copy runtime DLLs first, then fill missing names from reference DLLs.
+          if [ -d unityengine-modules/lib ]; then
+            while IFS= read -r -d '' lib_dll; do
+              dll_name=$(basename "$lib_dll")
+              if [ ! -f "$INTEROP_DIR/$dll_name" ]; then
+                cp "$lib_dll" "$INTEROP_DIR/"
+              fi
+            done < <(find unityengine-modules/lib -type f -name 'UnityEngine*.dll' -print0 | sort -z)
+          fi
+          if [ -d unityengine-modules/ref ]; then
+            while IFS= read -r -d '' ref_dll; do
+              dll_name=$(basename "$ref_dll")
+              if [ ! -f "$INTEROP_DIR/$dll_name" ]; then
+                cp "$ref_dll" "$INTEROP_DIR/"
+              fi
+            done < <(find unityengine-modules/ref -type f -name 'UnityEngine*.dll' -print0 | sort -z)
+          fi
+          COPIED_UNITY_DLL_COUNT=$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' | wc -l)
+          if [ "$COPIED_UNITY_DLL_COUNT" -eq 0 ]; then
+            [ -d unityengine-modules/ref ] && REF_STATUS="present" || REF_STATUS="missing"
+            [ -d unityengine-modules/lib ] && LIB_STATUS="present" || LIB_STATUS="missing"
+            echo "No UnityEngine*.dll files were copied into interop directory (ref=${REF_STATUS}, lib=${LIB_STATUS})." >&2
+            exit 1
+          fi
+
+          echo "Unity interop DLLs available:"
+          ls "$INTEROP_DIR" | head -n 50
+
+      - name: Create CI project file
+        if: steps.check.outputs.needs_build == 'true'
+        run: |
+          # Verify that the target file exists.
+          if [ ! -f nebula-source/NebulaLoader/NebulaLoader.cs ]; then
+            echo "CI preparation failed: nebula-source/NebulaLoader/NebulaLoader.cs is missing." >&2
             exit 1
           fi
           # Replace the csproj with a CI-appropriate version.
