@@ -150,9 +150,26 @@ jobs:
             exit 1
           fi
 
-          NUPKG_URL="https://nuget.bepinex.dev/packages/${PACKAGE_ID_LOWER}/${VERSION}"
-          echo "Downloading ${PACKAGE_ID} ${VERSION} from: $NUPKG_URL"
-          curl -fsSL -o unityengine-modules.nupkg "$NUPKG_URL"
+          NUPKG_URLS=(
+            "https://nuget.bepinex.dev/packages/${PACKAGE_ID_LOWER}/${VERSION}"
+            "https://nuget.bepinex.dev/packages/${PACKAGE_ID}/${VERSION}"
+            "https://nuget.bepinex.dev/packages/${PACKAGE_ID_LOWER}/${VERSION}/${PACKAGE_ID_LOWER}.${VERSION}.nupkg"
+            "https://nuget.bepinex.dev/packages/${PACKAGE_ID_LOWER}/${VERSION}/${PACKAGE_ID}.${VERSION}.nupkg"
+          )
+
+          DOWNLOADED_URL=""
+          for nupkg_url in "${NUPKG_URLS[@]}"; do
+            if curl -fsSL -o unityengine-modules.nupkg "$nupkg_url"; then
+              DOWNLOADED_URL="$nupkg_url"
+              break
+            fi
+          done
+
+          if [ -z "$DOWNLOADED_URL" ]; then
+            echo "Failed to download ${PACKAGE_ID} ${VERSION} package from nuget.bepinex.dev" >&2
+            exit 1
+          fi
+          echo "Downloaded ${PACKAGE_ID} ${VERSION} from: $DOWNLOADED_URL"
           unzip -q unityengine-modules.nupkg -d unityengine-modules
           rm -f unityengine-modules.nupkg unityengine-modules-index.json
           chmod -R a+rX unityengine-modules
