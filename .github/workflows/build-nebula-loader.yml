@@ -154,11 +154,10 @@ jobs:
 
           if [ -z "$PACKAGE_CONTENT_URL" ] || [ "$PACKAGE_CONTENT_URL" = "null" ]; then
             REGISTRATION_PAGE_URL=$(jq -r '
-              [ .items[]? | {v:(.upper // .lower // "" | ascii_downcase), id:(.["@id"] // "")}
-                | select(.id != "") ]
-              | sort_by(.v)
+              [ .items[]? | .["@id"] // empty ]
+              | map(select(. != ""))
               | last
-              | .id // empty
+              // empty
             ' unityengine-modules-registration-index.json)
 
             if [ -z "$REGISTRATION_PAGE_URL" ] || [ "$REGISTRATION_PAGE_URL" = "null" ]; then
@@ -205,12 +204,17 @@ jobs:
           rm -f unityengine-modules.nupkg unityengine-modules-registration-index.json unityengine-modules-registration-page.json
           chmod -R a+rX unityengine-modules
 
-          # Copy UnityEngine DLLs from package reference/runtime folders.
-          if [ -d unityengine-modules/ref ]; then
-            find unityengine-modules/ref -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
-          fi
+          # Copy runtime DLLs first, then fill missing names from reference DLLs.
           if [ -d unityengine-modules/lib ]; then
             find unityengine-modules/lib -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
+          fi
+          if [ -d unityengine-modules/ref ]; then
+            while IFS= read -r ref_dll; do
+              dll_name=$(basename "$ref_dll")
+              if [ ! -f "$INTEROP_DIR/$dll_name" ]; then
+                cp -f "$ref_dll" "$INTEROP_DIR/"
+              fi
+            done < <(find unityengine-modules/ref -type f -name 'UnityEngine*.dll')
           fi
           COPIED_UNITY_DLL_COUNT=$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' | wc -l)
           if [ "$COPIED_UNITY_DLL_COUNT" -eq 0 ]; then
