@@ -139,6 +139,11 @@ jobs:
             exit 1
           fi
 
+          if ! jq -e '.items | type == "array"' unityengine-modules-registration-index.json >/dev/null 2>&1; then
+            echo "Invalid registration index structure for ${PACKAGE_ID}: missing .items array" >&2
+            exit 1
+          fi
+
           PACKAGE_CONTENT_URL=$(jq -r '
             [ .items[]? | .items[]? | {v:(.catalogEntry.version // "" | ascii_downcase), u:(.packageContent // "")}
               | select(.v != "" and .u != "") ]
@@ -166,6 +171,11 @@ jobs:
               exit 1
             fi
 
+            if ! jq -e '.items | type == "array"' unityengine-modules-registration-page.json >/dev/null 2>&1; then
+              echo "Invalid registration page structure for ${PACKAGE_ID}: missing .items array" >&2
+              exit 1
+            fi
+
             PACKAGE_CONTENT_URL=$(jq -r '
               [ .items[]? | {v:(.catalogEntry.version // "" | ascii_downcase), u:(.packageContent // "")}
                 | select(.v != "" and .u != "") ]
@@ -186,7 +196,7 @@ jobs:
             exit 1
           fi
           if ! unzip -tq unityengine-modules.nupkg >/dev/null 2>&1; then
-            echo "Downloaded file is not a valid nupkg archive: $PACKAGE_CONTENT_URL" >&2
+            echo "nupkg integrity check failed (invalid/corrupt archive): $PACKAGE_CONTENT_URL" >&2
             exit 1
           fi
 
@@ -204,7 +214,9 @@ jobs:
           fi
           COPIED_UNITY_DLL_COUNT=$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' | wc -l)
           if [ "$COPIED_UNITY_DLL_COUNT" -eq 0 ]; then
-            echo "No UnityEngine*.dll files were copied into interop directory." >&2
+            [ -d unityengine-modules/ref ] && REF_STATUS="present" || REF_STATUS="missing"
+            [ -d unityengine-modules/lib ] && LIB_STATUS="present" || LIB_STATUS="missing"
+            echo "No UnityEngine*.dll files were copied into interop directory (ref=${REF_STATUS}, lib=${LIB_STATUS})." >&2
             exit 1
           fi
 
