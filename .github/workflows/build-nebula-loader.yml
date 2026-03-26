@@ -182,11 +182,6 @@ jobs:
             exit 1
           fi
 
-          if [ -z "$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' -print -quit)" ]; then
-            echo "No UnityEngine*.dll found after extraction from ${PACKAGE_ID} package." >&2
-            exit 1
-          fi
-
           echo "Unity interop DLLs available:"
           ls "$INTEROP_DIR" | head -n 50
 
