@@ -131,34 +131,68 @@ jobs:
           mkdir -p "$INTEROP_DIR"
 
           PACKAGE_ID="UnityEngine.Modules"
-          NUPKG_URLS=(
-            "https://nuget.bepinex.dev/packages/${PACKAGE_ID}"
-            "https://nuget.bepinex.dev/packages/${PACKAGE_ID}/"
-            "https://nuget.bepinex.dev/packages/unityengine.modules"
-            "https://nuget.bepinex.dev/packages/unityengine.modules/"
-          )
+          PACKAGE_ID_LOWER=$(echo "$PACKAGE_ID" | tr '[:upper:]' '[:lower:]')
+          REGISTRATION_INDEX_URL="https://nuget.bepinex.dev/v3/registration/${PACKAGE_ID_LOWER}/index.json"
 
-          DOWNLOADED_URL=""
-          rm -rf unityengine-modules unityengine-modules.nupkg
-          for nupkg_url in "${NUPKG_URLS[@]}"; do
-            if ! curl -fsSL -o unityengine-modules.nupkg "$nupkg_url"; then
-              echo "Failed to download package from: $nupkg_url"
-              continue
-            fi
-            if unzip -tq unityengine-modules.nupkg >/dev/null 2>&1; then
-              DOWNLOADED_URL="$nupkg_url"
-              unzip -q unityengine-modules.nupkg -d unityengine-modules
-              break
-            fi
-            echo "Downloaded file is not a valid nupkg archive: $nupkg_url"
-          done
-
-          if [ -z "$DOWNLOADED_URL" ]; then
-            echo "Failed to download a valid ${PACKAGE_ID} package from nuget.bepinex.dev" >&2
+          if ! curl -fsSL -o unityengine-modules-registration-index.json "$REGISTRATION_INDEX_URL"; then
+            echo "Failed to download registration index: $REGISTRATION_INDEX_URL" >&2
             exit 1
           fi
-          echo "Downloaded ${PACKAGE_ID} package from: $DOWNLOADED_URL"
-          rm -f unityengine-modules.nupkg
+
+          PACKAGE_CONTENT_URL=$(jq -r '
+            [ .items[]? | .items[]? | {v:(.catalogEntry.version // "" | ascii_downcase), u:(.packageContent // "")}
+              | select(.v != "" and .u != "") ]
+            | sort_by(.v)
+            | last
+            | .u // empty
+          ' unityengine-modules-registration-index.json)
+
+          if [ -z "$PACKAGE_CONTENT_URL" ] || [ "$PACKAGE_CONTENT_URL" = "null" ]; then
+            REGISTRATION_PAGE_URL=$(jq -r '
+              [ .items[]? | {v:(.upper // .lower // "" | ascii_downcase), id:(.["@id"] // "")}
+                | select(.id != "") ]
+              | sort_by(.v)
+              | last
+              | .id // empty
+            ' unityengine-modules-registration-index.json)
+
+            if [ -z "$REGISTRATION_PAGE_URL" ] || [ "$REGISTRATION_PAGE_URL" = "null" ]; then
+              echo "Failed to resolve registration page URL for ${PACKAGE_ID}" >&2
+              exit 1
+            fi
+
+            if ! curl -fsSL -o unityengine-modules-registration-page.json "$REGISTRATION_PAGE_URL"; then
+              echo "Failed to download registration page: $REGISTRATION_PAGE_URL" >&2
+              exit 1
+            fi
+
+            PACKAGE_CONTENT_URL=$(jq -r '
+              [ .items[]? | {v:(.catalogEntry.version // "" | ascii_downcase), u:(.packageContent // "")}
+                | select(.v != "" and .u != "") ]
+              | sort_by(.v)
+              | last
+              | .u // empty
+            ' unityengine-modules-registration-page.json)
+          fi
+
+          if [ -z "$PACKAGE_CONTENT_URL" ] || [ "$PACKAGE_CONTENT_URL" = "null" ]; then
+            echo "Failed to resolve packageContent URL for ${PACKAGE_ID}" >&2
+            exit 1
+          fi
+
+          rm -rf unityengine-modules unityengine-modules.nupkg
+          if ! curl -fsSL -o unityengine-modules.nupkg "$PACKAGE_CONTENT_URL"; then
+            echo "Failed to download packageContent URL: $PACKAGE_CONTENT_URL" >&2
+            exit 1
+          fi
+          if ! unzip -tq unityengine-modules.nupkg >/dev/null 2>&1; then
+            echo "Downloaded file is not a valid nupkg archive: $PACKAGE_CONTENT_URL" >&2
+            exit 1
+          fi
+
+          unzip -q unityengine-modules.nupkg -d unityengine-modules
+          echo "Downloaded ${PACKAGE_ID} package from packageContent: $PACKAGE_CONTENT_URL"
+          rm -f unityengine-modules.nupkg unityengine-modules-registration-index.json unityengine-modules-registration-page.json
           chmod -R a+rX unityengine-modules
 
           # Copy UnityEngine DLLs from package reference/runtime folders.
