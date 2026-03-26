@@ -141,7 +141,10 @@ jobs:
           DOWNLOADED_URL=""
           for nupkg_url in "${NUPKG_URLS[@]}"; do
             rm -rf unityengine-modules unityengine-modules.nupkg
-            if curl -fsSL -o unityengine-modules.nupkg "$nupkg_url" && unzip -tq unityengine-modules.nupkg >/dev/null 2>&1; then
+            if ! curl -fsSL -o unityengine-modules.nupkg "$nupkg_url"; then
+              continue
+            fi
+            if unzip -tq unityengine-modules.nupkg >/dev/null 2>&1; then
               DOWNLOADED_URL="$nupkg_url"
               unzip -q unityengine-modules.nupkg -d unityengine-modules
               break
@@ -157,7 +160,12 @@ jobs:
           chmod -R a+rX unityengine-modules
 
           # Copy UnityEngine DLLs from package reference/runtime folders.
-          find unityengine-modules/ref unityengine-modules/lib -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \; 2>/dev/null || true
+          if [ -d unityengine-modules/ref ]; then
+            find unityengine-modules/ref -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
+          fi
+          if [ -d unityengine-modules/lib ]; then
+            find unityengine-modules/lib -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
+          fi
           COPIED_UNITY_DLL_COUNT=$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' | wc -l)
           if [ "$COPIED_UNITY_DLL_COUNT" -eq 0 ]; then
             echo "No UnityEngine*.dll files were copied into interop directory." >&2
