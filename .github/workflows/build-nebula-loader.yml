@@ -145,11 +145,10 @@ jobs:
           fi
 
           PACKAGE_CONTENT_URL=$(jq -r '
-            [ .items[]? | .items[]? | {v:(.catalogEntry.version // "" | ascii_downcase), u:(.packageContent // "")}
-              | select(.v != "" and .u != "") ]
-            | sort_by(.v)
+            [ .items[]? | .items[]?
+              | select((.catalogEntry.version // "") != "" and (.packageContent // "") != "") ]
             | last
-            | .u // empty
+            | .packageContent // empty
           ' unityengine-modules-registration-index.json)
 
           if [ -z "$PACKAGE_CONTENT_URL" ] || [ "$PACKAGE_CONTENT_URL" = "null" ]; then
@@ -176,11 +175,10 @@ jobs:
             fi
 
             PACKAGE_CONTENT_URL=$(jq -r '
-              [ .items[]? | {v:(.catalogEntry.version // "" | ascii_downcase), u:(.packageContent // "")}
-                | select(.v != "" and .u != "") ]
-              | sort_by(.v)
+              [ .items[]?
+                | select((.catalogEntry.version // "") != "" and (.packageContent // "") != "") ]
               | last
-              | .u // empty
+              | .packageContent // empty
             ' unityengine-modules-registration-page.json)
           fi
 
@@ -206,15 +204,20 @@ jobs:
 
           # Copy runtime DLLs first, then fill missing names from reference DLLs.
           if [ -d unityengine-modules/lib ]; then
-            find unityengine-modules/lib -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
+            while IFS= read -r -d '' lib_dll; do
+              dll_name=$(basename "$lib_dll")
+              if [ ! -f "$INTEROP_DIR/$dll_name" ]; then
+                cp "$lib_dll" "$INTEROP_DIR/"
+              fi
+            done < <(find unityengine-modules/lib -type f -name 'UnityEngine*.dll' -print0 | sort -z)
           fi
           if [ -d unityengine-modules/ref ]; then
-            while IFS= read -r ref_dll; do
+            while IFS= read -r -d '' ref_dll; do
               dll_name=$(basename "$ref_dll")
               if [ ! -f "$INTEROP_DIR/$dll_name" ]; then
-                cp -f "$ref_dll" "$INTEROP_DIR/"
+                cp "$ref_dll" "$INTEROP_DIR/"
               fi
-            done < <(find unityengine-modules/ref -type f -name 'UnityEngine*.dll')
+            done < <(find unityengine-modules/ref -type f -name 'UnityEngine*.dll' -print0 | sort -z)
           fi
           COPIED_UNITY_DLL_COUNT=$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' | wc -l)
           if [ "$COPIED_UNITY_DLL_COUNT" -eq 0 ]; then
