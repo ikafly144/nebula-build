@@ -144,7 +144,7 @@ jobs:
             exit 1
           fi
 
-          VERSION=$(jq -r '.versions | map(select(type=="string")) | sort_by(split(".") | map(tonumber? // 0)) | last // empty' unityengine-modules-index.json)
+          VERSION=$(jq -r '.versions | map(select(type=="string")) | last // empty' unityengine-modules-index.json)
           if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
             echo "Failed to resolve package version for ${PACKAGE_ID}" >&2
             exit 1
@@ -174,8 +174,8 @@ jobs:
           rm -f unityengine-modules.nupkg unityengine-modules-index.json
           chmod -R a+rX unityengine-modules
 
-          # Copy UnityEngine DLLs required by compile-time references.
-          find unityengine-modules -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
+          # Copy UnityEngine DLLs from lib/ to avoid bringing unrelated files.
+          find unityengine-modules/lib -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
           COPIED_UNITY_DLL_COUNT=$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' | wc -l)
           if [ "$COPIED_UNITY_DLL_COUNT" -eq 0 ]; then
             echo "No UnityEngine*.dll files were copied into interop directory." >&2
