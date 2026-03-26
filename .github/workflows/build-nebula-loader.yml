@@ -166,6 +166,14 @@ jobs:
           echo "Build output:"
           ls -la bin/Release/net6.0/
 
+      - name: Upload build artifact
+        if: steps.check.outputs.needs_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: NebulaLoader-${{ steps.check.outputs.latest_sha }}
+          path: nebula-source/NebulaLoader/bin/Release/net6.0/NebulaLoader.dll
+          if-no-files-found: error
+
       - name: Create GitHub Release
         if: steps.check.outputs.needs_build == 'true' && github.event_name != 'pull_request'
         env:
