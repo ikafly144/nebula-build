@@ -139,9 +139,10 @@ jobs:
           )
 
           DOWNLOADED_URL=""
+          rm -rf unityengine-modules unityengine-modules.nupkg
           for nupkg_url in "${NUPKG_URLS[@]}"; do
-            rm -rf unityengine-modules unityengine-modules.nupkg
             if ! curl -fsSL -o unityengine-modules.nupkg "$nupkg_url"; then
+              echo "Failed to download package from: $nupkg_url"
               continue
             fi
             if unzip -tq unityengine-modules.nupkg >/dev/null 2>&1; then
@@ -149,6 +150,7 @@ jobs:
               unzip -q unityengine-modules.nupkg -d unityengine-modules
               break
             fi
+            echo "Downloaded file is not a valid nupkg archive: $nupkg_url"
           done
 
           if [ -z "$DOWNLOADED_URL" ]; then
