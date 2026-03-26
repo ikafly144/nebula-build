@@ -131,51 +131,33 @@ jobs:
           mkdir -p "$INTEROP_DIR"
 
           PACKAGE_ID="UnityEngine.Modules"
-          PACKAGE_ID_LOWER=$(echo "$PACKAGE_ID" | tr '[:upper:]' '[:lower:]')
-          INDEX_URL="https://nuget.bepinex.dev/packages/${PACKAGE_ID}/index.json"
-          INDEX_URL_LOWER="https://nuget.bepinex.dev/packages/${PACKAGE_ID_LOWER}/index.json"
-
-          if curl -fsSL "$INDEX_URL" -o unityengine-modules-index.json; then
-            :
-          elif curl -fsSL "$INDEX_URL_LOWER" -o unityengine-modules-index.json; then
-            :
-          else
-            echo "Failed to download package index for ${PACKAGE_ID} from nuget.bepinex.dev" >&2
-            exit 1
-          fi
-
-          VERSION=$(jq -r '.versions | map(select(type=="string")) | last // empty' unityengine-modules-index.json)
-          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-            echo "Failed to resolve package version for ${PACKAGE_ID}" >&2
-            exit 1
-          fi
-
           NUPKG_URLS=(
-            "https://nuget.bepinex.dev/packages/${PACKAGE_ID_LOWER}/${VERSION}"
-            "https://nuget.bepinex.dev/packages/${PACKAGE_ID}/${VERSION}"
-            "https://nuget.bepinex.dev/packages/${PACKAGE_ID_LOWER}/${VERSION}/${PACKAGE_ID_LOWER}.${VERSION}.nupkg"
-            "https://nuget.bepinex.dev/packages/${PACKAGE_ID_LOWER}/${VERSION}/${PACKAGE_ID}.${VERSION}.nupkg"
+            "https://nuget.bepinex.dev/packages/${PACKAGE_ID}"
+            "https://nuget.bepinex.dev/packages/${PACKAGE_ID}/"
+            "https://nuget.bepinex.dev/packages/unityengine.modules"
+            "https://nuget.bepinex.dev/packages/unityengine.modules/"
           )
 
           DOWNLOADED_URL=""
           for nupkg_url in "${NUPKG_URLS[@]}"; do
-            if curl -fsSL -o unityengine-modules.nupkg "$nupkg_url"; then
+            rm -rf unityengine-modules unityengine-modules.nupkg
+            if curl -fsSL -o unityengine-modules.nupkg "$nupkg_url" && unzip -tq unityengine-modules.nupkg >/dev/null 2>&1; then
               DOWNLOADED_URL="$nupkg_url"
+              unzip -q unityengine-modules.nupkg -d unityengine-modules
               break
             fi
           done
 
           if [ -z "$DOWNLOADED_URL" ]; then
-            echo "Failed to download ${PACKAGE_ID} ${VERSION} package from nuget.bepinex.dev" >&2
+            echo "Failed to download a valid ${PACKAGE_ID} package from nuget.bepinex.dev" >&2
             exit 1
           fi
-          echo "Downloaded ${PACKAGE_ID} ${VERSION} from: $DOWNLOADED_URL"
-          unzip -q unityengine-modules.nupkg -d unityengine-modules
-          rm -f unityengine-modules.nupkg unityengine-modules-index.json
+          echo "Downloaded ${PACKAGE_ID} package from: $DOWNLOADED_URL"
+          rm -f unityengine-modules.nupkg
           chmod -R a+rX unityengine-modules
 
-          # Copy UnityEngine DLLs from lib/ to avoid bringing unrelated files.
-          find unityengine-modules/lib -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
+          # Copy UnityEngine DLLs from package reference/runtime folders.
+          find unityengine-modules/ref unityengine-modules/lib -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \; 2>/dev/null || true
           COPIED_UNITY_DLL_COUNT=$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' | wc -l)
           if [ "$COPIED_UNITY_DLL_COUNT" -eq 0 ]; then
             echo "No UnityEngine*.dll files were copied into interop directory." >&2
