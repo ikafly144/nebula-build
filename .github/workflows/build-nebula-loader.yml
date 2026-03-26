@@ -43,6 +43,7 @@ jobs:
 
           # Check if a release with this SHA tag already exists
           RELEASE_BODY_FILE=$(mktemp)
+          trap 'rm -f "$RELEASE_BODY_FILE"' EXIT
           HTTP_STATUS=$(curl -s -o "$RELEASE_BODY_FILE" -w "%{http_code}" \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -50,6 +51,7 @@ jobs:
             "https://api.github.com/repos/${{ github.repository }}/releases/tags/$LATEST_SHA")
           RELEASE_BODY=$(cat "$RELEASE_BODY_FILE")
           rm -f "$RELEASE_BODY_FILE"
+          trap - EXIT
 
           if [ "$HTTP_STATUS" = "200" ]; then
             echo "Release already exists for $LATEST_SHA, skipping build"
