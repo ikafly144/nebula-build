@@ -6,6 +6,10 @@ on:
   workflow_dispatch:       # Allow manual trigger
   pull_request:            # Run on PR pushes (for testing)
 
+concurrency:
+  group: build-nebula-loader-${{ github.event_name == 'pull_request' && github.ref || 'release' }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -31,19 +35,34 @@ jobs:
           echo "latest_sha=$LATEST_SHA" >> "$GITHUB_OUTPUT"
           echo "Latest NebulaLoader commit: $LATEST_SHA"
 
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "pull_request run: always build for workflow validation"
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           # Check if a release with this SHA tag already exists
-          HTTP_STATUS=$(curl -o /dev/null -s -w "%{http_code}" \
+          RELEASE_RESPONSE=$(curl -s -w "%{http_code}" \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${{ github.repository }}/releases/tags/$LATEST_SHA")
 
+          HTTP_STATUS=${RELEASE_RESPONSE: -3}
+          RELEASE_BODY=${RELEASE_RESPONSE%???}
+
           if [ "$HTTP_STATUS" = "200" ]; then
             echo "Release already exists for $LATEST_SHA, skipping build"
             echo "needs_build=false" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$HTTP_STATUS" = "404" ]; then
             echo "No existing release for $LATEST_SHA, will build"
             echo "needs_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Error checking existing release for $LATEST_SHA"
+            echo "HTTP status: $HTTP_STATUS"
+            echo "Response body:"
+            echo "$RELEASE_BODY"
+            exit 1
           fi
 
       - name: Setup .NET
@@ -139,7 +158,7 @@ jobs:
           ls -la bin/Release/net6.0/
 
       - name: Create GitHub Release
-        if: steps.check.outputs.needs_build == 'true'
+        if: steps.check.outputs.needs_build == 'true' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
