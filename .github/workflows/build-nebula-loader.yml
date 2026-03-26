@@ -148,7 +148,7 @@ jobs:
 
           if [ -z "$UNITY_LIB_URL" ]; then
             INDEX_HTML=$(curl -fsSL "https://unity.bepinex.dev/libraries/")
-            LATEST_VERSION=$(echo "$INDEX_HTML" | grep -oE '>[0-9]+\.[0-9]+\.[0-9]+[a-z][0-9]+/<'
+            LATEST_VERSION=$(echo "$INDEX_HTML" | grep -oE '>[0-9]+\.[0-9]+\.[0-9]+[^<]*/<'
               | sed -E 's/[><\/]//g'
               | sort -V
               | tail -n 1)
@@ -163,12 +163,12 @@ jobs:
           fi
 
           echo "Downloading Unity libraries from: $UNITY_LIB_URL"
-          curl -fsSL -o unity-libraries.zip "$UNITY_LIB_URL"
-          unzip -q unity-libraries.zip -d unity-libraries
+          curl -fSL -o unity-libraries.zip "$UNITY_LIB_URL"
+          unzip unity-libraries.zip -d unity-libraries
           chmod -R a+rX unity-libraries
 
-          # Copy all managed Unity DLLs to interop so csproj wildcard reference can resolve them.
-          find unity-libraries -type f -name '*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
+          # Copy UnityEngine DLLs required by compile-time references.
+          find unity-libraries -type f -name 'UnityEngine*.dll' -exec cp -f {} "$INTEROP_DIR"/ \;
 
           if [ -z "$(find "$INTEROP_DIR" -maxdepth 1 -type f -name 'UnityEngine*.dll' -print -quit)" ]; then
             echo "No UnityEngine*.dll found after extraction from unity.bepinex.dev archive." >&2
