@@ -1,0 +1,153 @@
+name: Build NebulaLoader
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight UTC
+  workflow_dispatch:       # Allow manual trigger
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check for NebulaLoader changes
+        id: check
+        run: |
+          # Get the latest commit SHA that affected NebulaLoader/
+          RESPONSE=$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/Dolly1016/Nebula-Public/commits?path=NebulaLoader%2F&per_page=1")
+
+          LATEST_SHA=$(echo "$RESPONSE" | jq -r '.[0].sha')
+          if [ "$LATEST_SHA" = "null" ] || [ -z "$LATEST_SHA" ]; then
+            echo "Failed to get latest commit SHA"
+            exit 1
+          fi
+
+          echo "latest_sha=$LATEST_SHA" >> "$GITHUB_OUTPUT"
+          echo "Latest NebulaLoader commit: $LATEST_SHA"
+
+          # Check if a release with this SHA tag already exists
+          HTTP_STATUS=$(curl -o /dev/null -s -w "%{http_code}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$LATEST_SHA")
+
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "Release already exists for $LATEST_SHA, skipping build"
+            echo "needs_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No existing release for $LATEST_SHA, will build"
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup .NET
+        if: steps.check.outputs.needs_build == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Checkout NebulaLoader source
+        if: steps.check.outputs.needs_build == 'true'
+        run: |
+          git clone --filter=blob:none --sparse \
+            https://github.com/Dolly1016/Nebula-Public.git nebula-source
+          cd nebula-source
+          git sparse-checkout set NebulaLoader
+          git checkout ${{ steps.check.outputs.latest_sha }}
+          echo "Checked out NebulaLoader at ${{ steps.check.outputs.latest_sha }}"
+
+      - name: Download BepInEx
+        if: steps.check.outputs.needs_build == 'true'
+        run: |
+          # Find the newest BepInEx release (including pre-releases, since BepInEx 6.x for
+          # Unity IL2CPP is still in "bleeding edge" and released as pre-releases) that has a
+          # Linux x64 Unity IL2CPP asset. Releases are returned newest-first, so first() gives
+          # the most recent matching release.
+          ASSET_URL=$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/BepInEx/BepInEx/releases" | \
+            jq -r 'first(.[].assets[] | select(.name | test("Unity\\.IL2CPP-linux-x64.*\\.zip")) | .browser_download_url)')
+
+          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+            echo "Failed to find BepInEx Unity IL2CPP Linux x64 asset"
+            exit 1
+          fi
+
+          echo "Downloading BepInEx from: $ASSET_URL"
+          curl -fsSL -o bepinex.zip "$ASSET_URL"
+
+          # Extract the archive
+          unzip -q bepinex.zip -d bepinex-extract
+
+          # Set up the directory structure expected by the csproj: $(AmongUs)/BepInEx/core/
+          mkdir -p "${{ github.workspace }}/among-us/BepInEx/interop"
+
+          if [ -d "bepinex-extract/BepInEx/core" ]; then
+            cp -r bepinex-extract/BepInEx/core "${{ github.workspace }}/among-us/BepInEx/"
+          else
+            echo "BepInEx/core directory not found. Archive contents:"
+            find bepinex-extract -maxdepth 3 -type d
+            exit 1
+          fi
+
+          echo "BepInEx core DLLs available:"
+          ls "${{ github.workspace }}/among-us/BepInEx/core/"
+
+      - name: Create CI project file
+        if: steps.check.outputs.needs_build == 'true'
+        run: |
+          # Replace the csproj with a CI-appropriate version.
+          # The original has post-build Copy targets that require a local game installation,
+          # which are not needed in CI. We strip those out and keep the DLL references.
+          cat > nebula-source/NebulaLoader/NebulaLoader.csproj << 'CSPROJ_EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+
+            <PropertyGroup>
+              <OutputType>Library</OutputType>
+              <TargetFramework>net6.0</TargetFramework>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+              <LangVersion>latest</LangVersion>
+            </PropertyGroup>
+
+            <ItemGroup>
+              <!-- Wildcard glob is the standard approach for BepInEx mods; MSBuild silently
+                   produces an empty item group if no files match (e.g. empty interop dir). -->
+              <Reference Include="$(AmongUs)/BepInEx/core/*.dll" />
+              <Reference Include="$(AmongUs)/BepInEx/interop/*.dll" />
+            </ItemGroup>
+
+          </Project>
+          CSPROJ_EOF
+
+      - name: Build NebulaLoader
+        if: steps.check.outputs.needs_build == 'true'
+        run: |
+          cd nebula-source/NebulaLoader
+          dotnet build \
+            -c Release \
+            -p:AmongUs="${{ github.workspace }}/among-us"
+
+          echo "Build output:"
+          ls -la bin/Release/net6.0/
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.needs_build == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA="${{ steps.check.outputs.latest_sha }}"
+          SHORT_SHA="${SHA:0:7}"
+          DATE=$(date -u +"%Y-%m-%d")
+          DLL_PATH="nebula-source/NebulaLoader/bin/Release/net6.0/NebulaLoader.dll"
+
+          gh release create "$SHA" \
+            --repo "${{ github.repository }}" \
+            --title "NebulaLoader ${SHORT_SHA} (${DATE})" \
+            --notes "Automated build of NebulaLoader from [Dolly1016/Nebula-Public@${SHORT_SHA}](https://github.com/Dolly1016/Nebula-Public/commit/${SHA})" \
+            "${DLL_PATH}#NebulaLoader.dll"
