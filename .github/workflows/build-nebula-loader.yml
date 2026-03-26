@@ -124,6 +124,25 @@ jobs:
       - name: Create CI project file
         if: steps.check.outputs.needs_build == 'true'
         run: |
+          # UnityEngine references are only used by commented sample code in NebulaLoader.cs.
+          # They fail to resolve in this CI environment, so remove those using lines for build.
+          sed -i -E \
+            -e '/^[[:space:]]*(global[[:space:]]+)?using[[:space:]]+UnityEngine\.Events/ d' \
+            -e '/^[[:space:]]*(global[[:space:]]+)?using[[:space:]]+UnityEngine\.SceneManagement/ d' \
+            nebula-source/NebulaLoader/NebulaLoader.cs
+
+          # Verify that the target file exists and that the UnityEngine using lines were removed.
+          if [ ! -f nebula-source/NebulaLoader/NebulaLoader.cs ]; then
+            echo "CI preparation failed: nebula-source/NebulaLoader/NebulaLoader.cs is missing." >&2
+            exit 1
+          fi
+
+          if grep -E '^[[:space:]]*(global[[:space:]]+)?using[[:space:]]+UnityEngine\.(Events|SceneManagement)\b' \
+            nebula-source/NebulaLoader/NebulaLoader.cs >/dev/null; then
+            echo "CI preparation failed: UnityEngine.* using directives remain in NebulaLoader.cs." >&2
+            echo "Please update the sed patterns in .github/workflows/build-nebula-loader.yml." >&2
+            exit 1
+          fi
           # Replace the csproj with a CI-appropriate version.
           # The original has post-build Copy targets that require a local game installation,
           # which are not needed in CI. We strip those out and keep the DLL references.
@@ -158,6 +177,14 @@ jobs:
 
           echo "Build output:"
           ls -la bin/Release/net6.0/
+
+      - name: Upload build artifact
+        if: steps.check.outputs.needs_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: NebulaLoader-${{ steps.check.outputs.latest_sha }}
+          path: nebula-source/NebulaLoader/bin/Release/net6.0/NebulaLoader.dll
+          if-no-files-found: error
 
       - name: Create GitHub Release
         if: steps.check.outputs.needs_build == 'true' && github.event_name != 'pull_request'
